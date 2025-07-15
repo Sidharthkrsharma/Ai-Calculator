@@ -28,9 +28,11 @@
 
 import ast
 import json
+import time
 
 import google.generativeai as genai
 from constants import GEMINI_API_KEY
+from google.api_core.exceptions import ResourceExhausted
 from PIL import Image
 
 genai.configure(api_key=GEMINI_API_KEY)
@@ -38,6 +40,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 def analyze_image(img: Image, dict_of_vars: dict):
     model = genai.GenerativeModel(model_name="gemini-1.5-flash")
     dict_of_vars_str = json.dumps(dict_of_vars, ensure_ascii=False)
+
     prompt = (
         f"You have been given an image with some mathematical expressions, equations, or graphical problems, and you need to solve them. "
         f"Note: Use the PEMDAS rule for solving mathematical expressions. PEMDAS stands for the Priority Order: Parentheses, Exponents, Multiplication and Division (from left to right), Addition and Subtraction (from left to right). Parentheses have the highest priority, followed by Exponents, then Multiplication and Division, and lastly Addition and Subtraction. "
@@ -59,17 +62,23 @@ def analyze_image(img: Image, dict_of_vars: dict):
         f"DO NOT USE BACKTICKS OR MARKDOWN FORMATTING. "
         f"PROPERLY QUOTE THE KEYS AND VALUES IN THE DICTIONARY FOR EASIER PARSING WITH Python's ast.literal_eval."
     )
-    response = model.generate_content([prompt, img])
-    print(response.text)
-    answers = []
-    try:
-        answers = ast.literal_eval(response.text)
-    except Exception as e:
-        print(f"Error in parsing response from Gemini API: {e}")
-    print('returned answer ', answers)
-    for answer in answers:
-        if 'assign' in answer:
-            answer['assign'] = True
-        else:
-            answer['assign'] = False
-    return answers
+    
+    max_retries = 3
+    retry_delay = 60  # seconds
+    for attempt in range(max_retries):
+        try:
+            response = model.generate_content([prompt, img])
+            print(response.text)
+            answers = ast.literal_eval(response.text)
+            for answer in answers:
+                answer['assign'] = answer.get('assign', False)
+            return answers
+        except ResourceExhausted as e:
+            print(f"[Attempt {attempt+1}] Quota exceeded. Waiting {retry_delay} seconds before retrying...")
+            time.sleep(retry_delay)
+        except Exception as e:
+            print(f"Error: {e}")
+            return []
+
+    print("All retry attempts failed due to quota exhaustion.")
+    return []
